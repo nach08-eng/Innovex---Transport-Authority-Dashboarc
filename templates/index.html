@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TN Transmit | Transport Authority</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><div class="brandmark">TN</div><div><strong>TN TRANSMIT</strong><span>TRANSPORT AUTHORITY COMMAND CENTRE</span></div></div>
+  <div class="topmeta"><span class="live-dot"></span><span>AUTHORITY DASHBOARD</span><span id="clock"></span></div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <p class="side-label">CONTROL ROOM</p>
+    <a class="nav active" href="#overview">▦ &nbsp; Overview</a>
+    <a class="nav" href="#alerts">⚠ &nbsp; Incoming alerts</a>
+    <a class="nav" href="#dispatch">↗ &nbsp; Bus allocation</a>
+    <a class="nav" href="#hotspots">⌁ &nbsp; Peak-hour analysis</a>
+    <a class="nav" href="#fleet">▤ &nbsp; Fleet management</a>
+    <a class="nav" href="#drivers">♙ &nbsp; Driver accounts</a>
+    <div class="sidebar-note"><span class="live-dot"></span> Local prototype<br><small>Alerts are stored in this computer's database.</small></div>
+  </aside>
+  <main class="main">
+    <section class="page-head" id="overview">
+      <div><p class="eyebrow">TRANSPORT INTELLIGENCE / TAMIL NADU</p><h1>Authority <em>Command Centre</em></h1><p class="sub">Receive incidents, coordinate standby buses and learn from recurring passenger demand.</p></div>
+      <div class="system-card"><span>ACTIVE CONTROL ROOM</span><strong>TN TRANSMIT DEMO</strong><small>Prototype environment</small></div>
+    </section>
+
+    <div class="banner"><div class="banner-icon">✦</div><div><strong>Dispatch decisions stay with authorised staff</strong><p>Incoming reports are stored and surfaced for review. Verify crowd estimates and emergency details before dispatching resources.</p></div><button class="icon-btn" onclick="this.parentElement.remove()">×</button></div>
+
+    <section class="stats">
+      <article class="stat"><div class="stat-label">OPEN ALERTS <span class="stat-icon blue">⚑</span></div><div class="stat-value" id="activeAlerts">0</div><small>Awaiting resolution</small></article>
+      <article class="stat"><div class="stat-label">URGENT EMERGENCIES <span class="stat-icon red">!</span></div><div class="stat-value" id="emergencies">0</div><small>Medical / injury / threat</small></article>
+      <article class="stat"><div class="stat-label">AVAILABLE BUSES <span class="stat-icon green">▰</span></div><div class="stat-value" id="availableBuses">0</div><small>Marked as standby</small></article>
+      <article class="stat"><div class="stat-label">CROWD REPORTS <span class="stat-icon orange">⌁</span></div><div class="stat-value" id="crowdEvents">0</div><small>Historical records saved</small></article>
+    </section>
+
+    <section class="panel" id="alerts">
+      <div class="panel-head"><div><h2>Incoming alerts</h2><p>Reports from bus AI systems and drivers</p></div><div class="head-actions"><select id="alertFilter" onchange="renderAlerts()"><option value="ALL">All alerts</option><option value="NEW">New</option><option value="ACKNOWLEDGED">Acknowledged</option><option value="RESOLVED">Resolved</option></select><button class="btn secondary" onclick="loadDashboard()">Refresh</button><button class="btn danger-outline" onclick="clearHistory()">Clear history</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Priority</th><th>Event / time</th><th>Vehicle / route</th><th>Location</th><th>People</th><th>Status</th><th>Actions</th></tr></thead><tbody id="alertRows"><tr><td colspan="7" class="empty">Loading alerts…</td></tr></tbody></table></div>
+    </section>
+
+    <section class="panel" id="dispatch">
+      <div class="panel-head"><div><h2>Allocate an additional bus</h2><p>Assign an available reserve vehicle to a route or crowd alert</p></div></div>
+      <form id="allocationForm" class="form-grid">
+        <label>Related alert<select id="allocationAlert"><option value="">No linked alert</option></select></label>
+        <label>Available bus<select id="allocationVehicle" required></select></label>
+        <label>Route / destination<input id="allocationRoute" placeholder="e.g. Route 21G" required></label>
+        <label>Estimated arrival (minutes)<input id="allocationEta" type="number" min="0" max="240" value="10" required></label>
+        <label class="full">Dispatcher / control room<input id="assignedTo" placeholder="Control room operator" value="Control Room"></label>
+        <button class="btn primary full" type="submit">Assign standby bus</button>
+        <p id="allocationMsg" class="form-msg full"></p>
+      </form>
+      <div class="subsection"><h3>Recent assignments</h3><div id="allocationList" class="assignment-list"></div></div>
+    </section>
+
+    <section class="two-col">
+      <div class="panel" id="hotspots">
+        <div class="panel-head"><div><h2>Peak-hour demand</h2><p>Recorded crowd alerts by local hour</p></div><span class="tag">HISTORICAL</span></div>
+        <div class="chart-box"><canvas id="hourChart"></canvas></div>
+        <div class="subsection"><h3>Recurring crowded areas</h3><div id="hotspotList" class="hotspot-list"></div></div>
+      </div>
+      <div class="panel" id="fleet">
+        <div class="panel-head"><div><h2>Fleet availability</h2><p>Prototype fleet register</p></div><span class="tag" id="fleetCount">0 VEHICLES</span></div>
+        <form id="vehicleForm" class="inline-form">
+          <input id="newVehicleId" placeholder="New bus ID" required>
+          <input id="newVehicleRoute" placeholder="Route / depot" value="Standby">
+          <button class="btn secondary" type="submit">Add bus</button>
+        </form>
+        <div class="fleet-list" id="fleetList"></div>
+      </div>
+    </section>
+    <section class="panel" id="drivers">
+      <div class="panel-head"><div><h2>Add driver login</h2><p>Create a driver account for the driver portal. The password is generated for you.</p></div></div>
+      <form id="driverForm" class="form-grid">
+        <label>Driver name<input id="driverDisplayName" maxlength="100" autocomplete="name" required></label>
+        <label>Username<input id="driverUsername" minlength="3" maxlength="50" pattern="[A-Za-z0-9._-]{3,50}" autocomplete="off" required></label>
+        <label class="full">Shared authority provisioning key<input id="driverProvisioningKey" type="password" autocomplete="off" required></label>
+        <button class="btn primary full" type="submit">Create driver login</button>
+        <p id="driverMsg" class="form-msg full" role="status"></p>
+      </form>
+      <div id="driverCredentials" class="subsection" hidden>
+        <h3>Save these credentials now</h3>
+        <p>The password is shown only once. Share it securely with the driver.</p>
+        <p><strong>Username:</strong> <code id="createdDriverUsername"></code></p>
+        <p><strong>Password:</strong> <code id="createdDriverPassword"></code></p>
+        <button class="btn secondary" id="copyDriverCredentials" type="button">Copy credentials</button>
+      </div>
+    </section>
+    <footer>TN Transmit Smart Crowd AI · Transport Authority prototype · Protect driver and passenger data.</footer>
+  </main>
+</div>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

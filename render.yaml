@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: transport-authority-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /health
+    envVars:
+      - key: DRIVER_PORTAL_URL
+        sync: false
+      - key: AUTHORITY_CALLBACK_TOKEN
+        sync: false
