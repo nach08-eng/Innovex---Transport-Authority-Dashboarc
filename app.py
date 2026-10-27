@@ -288,6 +288,7 @@ def provision_driver():
             (parsed_url.scheme == "https" or local_http)
             and bool(parsed_url.hostname)
             and (local_http or parsed_url.port in (None, 443))
+            and parsed_url.path in ("", "/")
             and parsed_url.username is None
             and parsed_url.password is None
             and not parsed_url.query
@@ -296,7 +297,10 @@ def provision_driver():
     except ValueError:
         valid_url = False
     if not valid_url:
-        return jsonify({"ok": False, "error": "DRIVER_PORTAL_URL must be an HTTPS driver portal URL"}), 503
+        return jsonify({
+            "ok": False,
+            "error": "DRIVER_PORTAL_URL must be the HTTPS driver service base URL only, without /login or any other path",
+        }), 503
 
     username = str(data.get("username") or "").strip().lower()
     if not re.fullmatch(r"[a-z0-9._-]{3,50}", username):
@@ -341,6 +345,11 @@ def provision_driver():
         return jsonify({
             "ok": False,
             "error": "The driver portal rejected the shared key. Set the same AUTHORITY_CALLBACK_TOKEN on both Render services, then redeploy both.",
+        }), 502
+    if response_status in {301, 302, 303, 307, 308}:
+        return jsonify({
+            "ok": False,
+            "error": "The driver portal redirected the provisioning request. Set DRIVER_PORTAL_URL to the driver service base URL only (for example https://tn-transmit-smart-crowd-ai.onrender.com), without /login, then redeploy the authority service.",
         }), 502
     if not isinstance(portal_response, dict) or response_status != 201 or portal_response.get("ok") is not True:
         if not isinstance(portal_response, dict):
