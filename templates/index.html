@@ -48,6 +48,7 @@
       <form id="allocationForm" class="form-grid">
         <label>Related alert<select id="allocationAlert"><option value="">No linked alert</option></select></label>
         <label>Available bus<select id="allocationVehicle" required></select></label>
+        <label>Driver portal username<input id="allocationDriver" autocomplete="username" placeholder="e.g. driver01" pattern="[a-zA-Z0-9._-]{3,50}" required><small>Must match the driver's portal login.</small></label>
         <label>Route / destination<input id="allocationRoute" placeholder="e.g. Route 21G" required></label>
         <label>Estimated arrival (minutes)<input id="allocationEta" type="number" min="0" max="240" value="10" required></label>
         <label class="full">Dispatcher / control room<input id="assignedTo" placeholder="Control room operator" value="Control Room"></label>

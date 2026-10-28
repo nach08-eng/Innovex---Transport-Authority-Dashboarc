@@ -26,7 +26,7 @@ function renderVehicles(){
  $('fleetList').innerHTML=dashboardData.vehicles.map(v=>`<div class="fleet-item"><div><strong>${esc(v.vehicle_id)}</strong><small>${esc(v.route)} · ${esc(v.driver_name||'Driver not assigned')} · ${esc(v.last_location)}</small></div><span class="fleet-status ${esc(v.status)}">${esc(v.status)}</span></div>`).join('')||'<p class="empty">No vehicles registered.</p>';
 }
 function renderAllocations(){
- $('allocationList').innerHTML=dashboardData.allocations.map(a=>`<div class="assignment"><div><strong>${esc(a.vehicle_id)} → ${esc(a.route)}</strong><small>${esc(a.stop_name||'Route assignment')} · ETA ${esc(a.eta_minutes)} min · ${esc(a.assigned_to)}</small></div><select aria-label="Assignment status" onchange="updateAllocation(${a.id},this.value)"><option ${a.status==='ASSIGNED'?'selected':''}>ASSIGNED</option><option ${a.status==='EN_ROUTE'?'selected':''}>EN_ROUTE</option><option ${a.status==='ARRIVED'?'selected':''}>ARRIVED</option><option ${a.status==='COMPLETED'?'selected':''}>COMPLETED</option><option ${a.status==='CANCELLED'?'selected':''}>CANCELLED</option></select></div>`).join('')||'<p class="empty">No bus assignments yet.</p>';
+ $('allocationList').innerHTML=dashboardData.allocations.map(a=>`<div class="assignment"><div><strong>${esc(a.vehicle_id)} → ${esc(a.route)}</strong><small>${esc(a.stop_name||'Route assignment')} · ${a.driver_username?`Driver @${esc(a.driver_username)}`:'Driver not linked'} · ETA ${esc(a.eta_minutes)} min · ${esc(a.assigned_to)}</small></div><button class="mini-btn" type="button" onclick="notifyAllocation(${a.id})">Notify driver</button><select aria-label="Assignment status" onchange="updateAllocation(${a.id},this.value)"><option ${a.status==='ASSIGNED'?'selected':''}>ASSIGNED</option><option ${a.status==='EN_ROUTE'?'selected':''}>EN_ROUTE</option><option ${a.status==='ARRIVED'?'selected':''}>ARRIVED</option><option ${a.status==='COMPLETED'?'selected':''}>COMPLETED</option><option ${a.status==='CANCELLED'?'selected':''}>CANCELLED</option></select></div>`).join('')||'<p class="empty">No bus assignments yet.</p>';
 }
 function renderHotspots(){
  $('hotspotList').innerHTML=dashboardData.hotspots.map(h=>`<div class="hotspot"><div><strong>${esc(h.stop_name)}</strong><small>${esc(h.route)} · Last: ${esc(fmtDate(h.last_seen))}</small></div><span class="tag">${h.events} reports</span></div>`).join('')||'<p class="empty">No crowd history yet. Incoming crowd reports will build this list.</p>';
@@ -52,12 +52,26 @@ async function setAlertStatus(id,status){
 }
 async function deleteAlert(id){if(!confirm(`Delete alert #${id}? This cannot be undone.`))return;await fetch(`/api/alerts/${id}`,{method:'DELETE'});loadDashboard();}
 async function clearHistory(){if(!confirm('Clear ALL alert history? This cannot be undone.'))return;const r=await fetch('/api/alerts',{method:'DELETE'});if(r.ok)loadDashboard();}
-function prepareAllocation(id){$('allocationAlert').value=String(id);const a=dashboardData.alerts.find(x=>x.id===id);if(a){$('allocationRoute').value=a.route;$('allocationEta').focus()}$('dispatch').scrollIntoView({behavior:'smooth'});}
+function prepareAllocation(id){$('allocationAlert').value=String(id);const a=dashboardData.alerts.find(x=>x.id===id);if(a){$('allocationRoute').value=a.route;$('allocationDriver').value=a.driver_username||'';$('allocationEta').focus()}$('dispatch').scrollIntoView({behavior:'smooth'});}
+$('allocationAlert').addEventListener('change',()=>{const alert=dashboardData.alerts.find(a=>String(a.id)===$('allocationAlert').value);$('allocationDriver').value=alert?alert.driver_username||'':''});
 async function updateAllocation(id,status){const r=await fetch(`/api/allocations/${id}/status`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});const d=await r.json();if(!r.ok)alert(d.error||'Could not update assignment');loadDashboard();}
+async function notifyAllocation(id){
+ const allocation=dashboardData.allocations.find(a=>a.id===id);
+ const username=(allocation&&allocation.driver_username)||prompt('Enter the driver portal username to notify about this assignment:');
+ if(!username)return;
+ const response=await fetch(`/api/allocations/${id}/notify`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({driver_username:username})});
+ const data=await response.json();
+ if(!response.ok){alert(data.error||'Could not notify driver');return}
+ if(data.driver_notification&&data.driver_notification.sent)alert(`Assignment notification sent to @${data.driver_username}.`);
+ else alert(`Assignment saved, but driver notification failed: ${(data.driver_notification&&data.driver_notification.error)||'Unknown callback error'}`);
+ loadDashboard();
+}
 $('allocationForm').addEventListener('submit',async e=>{
- e.preventDefault();const payload={alert_id:$('allocationAlert').value||null,vehicle_id:$('allocationVehicle').value,route:$('allocationRoute').value,eta_minutes:$('allocationEta').value,assigned_to:$('assignedTo').value};
+ e.preventDefault();const payload={alert_id:$('allocationAlert').value||null,vehicle_id:$('allocationVehicle').value,driver_username:$('allocationDriver').value,route:$('allocationRoute').value,eta_minutes:$('allocationEta').value,assigned_to:$('assignedTo').value};
  const r=await fetch('/api/allocations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();
- $('allocationMsg').textContent=r.ok?`Bus ${d.vehicle_id} assigned to ${d.route}.`:(d.error||'Allocation failed.');
+ if(!r.ok)$('allocationMsg').textContent=d.error||'Allocation failed.';
+ else if(d.driver_notification&&d.driver_notification.sent)$('allocationMsg').textContent=`Bus ${d.vehicle_id} assigned to ${d.route}. Driver @${d.driver_username} notified.`;
+ else $('allocationMsg').textContent=`Bus ${d.vehicle_id} assigned to ${d.route}, but driver @${d.driver_username} was not notified: ${(d.driver_notification&&d.driver_notification.error)||'Unknown callback error'}`;
  if(r.ok)loadDashboard();
 });
 $('vehicleForm').addEventListener('submit',async e=>{

@@ -30,6 +30,9 @@ The authority dashboard can provision accounts for the separate driver portal. I
 
 Open the authority dashboard over HTTPS and use **Add driver login**. Enter the driver's name, a username (3-50 letters, numbers, dots, underscores or hyphens), and the same `AUTHORITY_CALLBACK_TOKEN` value. The authority generates a strong password and provisions the account through the driver's existing authenticated API. The password is only shown once, is not saved by the authority, and is stored as a hash by the driver portal. Copy it and deliver it to the driver securely. An “Invalid driver provisioning key” response means the entered key does not match the authority service's configured value; if the driver portal key differs, the dashboard reports that the portal rejected it.
 
+## Notify a driver about a bus assignment
+When assigning an available bus, enter the driver's exact driver-portal username in **Driver portal username**. The authority sends the assignment to the driver portal's authenticated `/api/authority/bus-allocation` endpoint using `DRIVER_PORTAL_URL` and the shared `AUTHORITY_CALLBACK_TOKEN`. The assignment is saved in the authority dashboard and the result tells you whether the driver portal accepted the notification. Use **Notify driver** beside a recent assignment to retry delivery; for older assignments without a saved username, it will ask you for the driver's portal username. A driver must be provisioned on the portal first and be signed in to see the targeted assignment in the shared updates feed.
+
 ## Demo data
 Three reserve buses and one on-route bus are seeded as illustrative demo records. Replace them with verified fleet data before operational use.
 
@@ -78,7 +81,8 @@ Allowed event types include `crowd`, `overcrowding`, `congestion`, `medical_emer
 - `DELETE /api/alerts/<id>` delete one alert
 - `DELETE /api/alerts` clear alert history
 - `POST /api/vehicles` add a fleet vehicle
-- `POST /api/allocations` assign an available bus to an alert/route
+- `POST /api/allocations` assign an available bus to a driver and alert/route
+- `POST /api/allocations/<id>/notify` notify or retry notifying the assigned driver
 - `POST /api/allocations/<id>/status` update assignment status
 - `GET /health` service health
 

@@ -57,6 +57,7 @@ def init_db():
             alert_id INTEGER,
             vehicle_id TEXT NOT NULL,
             route TEXT NOT NULL,
+            driver_username TEXT NOT NULL DEFAULT '',
             assigned_to TEXT NOT NULL DEFAULT '',
             eta_minutes INTEGER NOT NULL DEFAULT 10,
             status TEXT NOT NULL DEFAULT 'ASSIGNED',
@@ -69,6 +70,9 @@ def init_db():
             con.execute("ALTER TABLE alerts ADD COLUMN callback_url TEXT")
         if "driver_username" not in alert_columns:
             con.execute("ALTER TABLE alerts ADD COLUMN driver_username TEXT NOT NULL DEFAULT ''")
+        allocation_columns = {row["name"] for row in con.execute("PRAGMA table_info(allocations)")}
+        if "driver_username" not in allocation_columns:
+            con.execute("ALTER TABLE allocations ADD COLUMN driver_username TEXT NOT NULL DEFAULT ''")
         count = con.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0]
         if count == 0:
             con.executemany("""INSERT INTO vehicles(vehicle_id,route,status,driver_name,last_location,updated_at)
@@ -146,6 +150,29 @@ class NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, new_url):
         return None
 
+def configured_driver_portal_url():
+    portal_url = os.environ.get("DRIVER_PORTAL_URL", "").strip().rstrip("/")
+    if not portal_url:
+        return None, "DRIVER_PORTAL_URL is not configured"
+    try:
+        parsed_url = urlsplit(portal_url)
+        local_http = parsed_url.scheme == "http" and parsed_url.hostname in {"localhost", "127.0.0.1"}
+        valid_url = (
+            (parsed_url.scheme == "https" or local_http)
+            and bool(parsed_url.hostname)
+            and (local_http or parsed_url.port in (None, 443))
+            and parsed_url.path in ("", "/")
+            and parsed_url.username is None
+            and parsed_url.password is None
+            and not parsed_url.query
+            and not parsed_url.fragment
+        )
+    except ValueError:
+        valid_url = False
+    if not valid_url:
+        return None, "DRIVER_PORTAL_URL must be the HTTPS driver service base URL only, without /login or any other path"
+    return portal_url, None
+
 def notify_driver(callback_url, payload):
     callback = urlsplit(callback_url)
     if callback.path.rstrip("/") == "/api/authority/bus-allocation":
@@ -175,6 +202,58 @@ def notify_driver(callback_url, payload):
         return {"sent": False, "error": f"Driver callback returned HTTP {error.code}"}
     except (URLError, TimeoutError, OSError) as error:
         return {"sent": False, "error": f"Driver callback failed: {error}"}
+
+def notify_driver_assignment(driver_username, vehicle_id, route, eta_minutes, allocation_id):
+    portal_url, error = configured_driver_portal_url()
+    if error:
+        return {"sent": False, "error": error}
+    token = os.environ.get("AUTHORITY_CALLBACK_TOKEN", "").strip()
+    if not token:
+        return {"sent": False, "error": "AUTHORITY_CALLBACK_TOKEN is not configured on the authority service"}
+    payload = json.dumps({
+        "status": "allocated",
+        "driver_username": driver_username,
+        "bus_id": vehicle_id,
+        "route": route,
+        "message": f"Bus {vehicle_id} assigned to {route}. ETA {eta_minutes} min.",
+        "allocation_id": str(allocation_id),
+    }).encode("utf-8")
+    callback_request = Request(
+        f"{portal_url}/api/authority/bus-allocation",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with build_opener(NoRedirectHandler).open(callback_request, timeout=5) as response:
+            response_body = response.read()
+            response_status = response.status
+    except HTTPError as error:
+        response_body = error.read()
+        response_status = error.code
+    except (URLError, TimeoutError, OSError) as error:
+        return {"sent": False, "error": f"Driver assignment callback failed: {error}"}
+
+    try:
+        portal_response = json.loads(response_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        portal_response = {}
+    if response_status in {301, 302, 303, 307, 308}:
+        return {"sent": False, "error": f"Driver portal redirected the assignment callback (HTTP {response_status})"}
+    if response_status == 401:
+        return {
+            "sent": False,
+            "error": "Driver portal rejected the shared key (HTTP 401). Set the same AUTHORITY_CALLBACK_TOKEN on both services and redeploy.",
+        }
+    if response_status != 201 or not isinstance(portal_response, dict) or portal_response.get("ok") is not True:
+        error = portal_response.get("error") if isinstance(portal_response, dict) else None
+        if not isinstance(error, str) or not error:
+            error = f"Driver portal returned HTTP {response_status}"
+        return {"sent": False, "error": error}
+    return {"sent": True}
 
 @app.post("/api/alerts")
 def receive_alert():
@@ -298,28 +377,11 @@ def provision_driver():
     ):
         return jsonify({"ok": False, "error": "Invalid driver provisioning key"}), 401
 
-    portal_url = os.environ.get("DRIVER_PORTAL_URL", "").strip().rstrip("/")
-    if not portal_url:
-        return jsonify({"ok": False, "error": "DRIVER_PORTAL_URL is not configured"}), 503
-    try:
-        parsed_url = urlsplit(portal_url)
-        local_http = parsed_url.scheme == "http" and parsed_url.hostname in {"localhost", "127.0.0.1"}
-        valid_url = (
-            (parsed_url.scheme == "https" or local_http)
-            and bool(parsed_url.hostname)
-            and (local_http or parsed_url.port in (None, 443))
-            and parsed_url.path in ("", "/")
-            and parsed_url.username is None
-            and parsed_url.password is None
-            and not parsed_url.query
-            and not parsed_url.fragment
-        )
-    except ValueError:
-        valid_url = False
-    if not valid_url:
+    portal_url, portal_url_error = configured_driver_portal_url()
+    if portal_url_error:
         return jsonify({
             "ok": False,
-            "error": "DRIVER_PORTAL_URL must be the HTTPS driver service base URL only, without /login or any other path",
+            "error": portal_url_error,
         }), 503
 
     username = str(data.get("username") or "").strip().lower()
@@ -390,6 +452,12 @@ def provision_driver():
 def allocate_bus():
     data = request.get_json(silent=True) or {}
     vehicle_id = str(data.get("vehicle_id") or "")
+    driver_username = str(data.get("driver_username") or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9._-]{3,50}", driver_username):
+        return jsonify({
+            "ok": False,
+            "error": "Enter the driver's portal username (3-50 letters, numbers, dots, underscores or hyphens) to deliver the assignment.",
+        }), 400
     try: alert_id = int(data.get("alert_id")) if data.get("alert_id") else None
     except (ValueError, TypeError): alert_id = None
     try: eta = max(0, min(240, int(data.get("eta_minutes") or 10)))
@@ -402,12 +470,56 @@ def allocate_bus():
             return jsonify({"ok": False, "error": "This bus is not marked AVAILABLE"}), 409
         alert = con.execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone() if alert_id else None
         route = str(data.get("route") or (alert["route"] if alert else vehicle["route"]))
-        cur = con.execute("""INSERT INTO allocations(alert_id,vehicle_id,route,assigned_to,eta_minutes,status,created_at)
-          VALUES(?,?,?,?,?,?,?)""", (alert_id, vehicle_id, route, str(data.get("assigned_to") or "Control Room"),
+        cur = con.execute("""INSERT INTO allocations(alert_id,vehicle_id,route,driver_username,assigned_to,eta_minutes,status,created_at)
+          VALUES(?,?,?,?,?,?,?,?)""", (alert_id, vehicle_id, route, driver_username, str(data.get("assigned_to") or "Control Room"),
           eta, "ASSIGNED", now_iso()))
         con.execute("UPDATE vehicles SET status='ALLOCATED', route=?, updated_at=? WHERE vehicle_id=?", (route, now_iso(), vehicle_id))
         allocation_id = cur.lastrowid
-    return jsonify({"ok": True, "allocation_id": allocation_id, "vehicle_id": vehicle_id, "route": route}), 201
+    notification = notify_driver_assignment(driver_username, vehicle_id, route, eta, allocation_id)
+    return jsonify({
+        "ok": True,
+        "allocation_id": allocation_id,
+        "vehicle_id": vehicle_id,
+        "route": route,
+        "driver_username": driver_username,
+        "driver_notification": notification,
+    }), 201
+
+@app.post("/api/allocations/<int:allocation_id>/notify")
+def notify_allocation_driver(allocation_id):
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "A JSON object is required"}), 400
+    with db() as con:
+        allocation = con.execute(
+            "SELECT id, vehicle_id, route, driver_username, eta_minutes FROM allocations WHERE id=?",
+            (allocation_id,),
+        ).fetchone()
+        if not allocation:
+            return jsonify({"ok": False, "error": "Allocation not found"}), 404
+        driver_username = str(data.get("driver_username") or allocation["driver_username"] or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9._-]{3,50}", driver_username):
+            return jsonify({
+                "ok": False,
+                "error": "Enter the driver's portal username (3-50 letters, numbers, dots, underscores or hyphens) to deliver the assignment.",
+            }), 400
+        if driver_username != allocation["driver_username"]:
+            con.execute(
+                "UPDATE allocations SET driver_username=? WHERE id=?",
+                (driver_username, allocation_id),
+            )
+    notification = notify_driver_assignment(
+        driver_username,
+        allocation["vehicle_id"],
+        allocation["route"],
+        allocation["eta_minutes"],
+        allocation["id"],
+    )
+    return jsonify({
+        "ok": True,
+        "driver_username": driver_username,
+        "driver_notification": notification,
+    })
 
 @app.post("/api/allocations/<int:allocation_id>/status")
 def allocation_status(allocation_id):
