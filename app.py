@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import secrets
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 APP_DIR = Path(__file__).resolve().parent
@@ -40,7 +40,8 @@ def init_db():
             created_at TEXT NOT NULL,
             acknowledged_at TEXT,
             resolved_at TEXT,
-            callback_url TEXT
+            callback_url TEXT,
+            driver_username TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS vehicles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +67,8 @@ def init_db():
         alert_columns = {row["name"] for row in con.execute("PRAGMA table_info(alerts)")}
         if "callback_url" not in alert_columns:
             con.execute("ALTER TABLE alerts ADD COLUMN callback_url TEXT")
+        if "driver_username" not in alert_columns:
+            con.execute("ALTER TABLE alerts ADD COLUMN driver_username TEXT NOT NULL DEFAULT ''")
         count = con.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0]
         if count == 0:
             con.executemany("""INSERT INTO vehicles(vehicle_id,route,status,driver_name,last_location,updated_at)
@@ -144,11 +147,23 @@ class NoRedirectHandler(HTTPRedirectHandler):
         return None
 
 def notify_driver(callback_url, payload):
+    callback = urlsplit(callback_url)
+    if callback.path.rstrip("/") == "/api/authority/bus-allocation":
+        callback_url = urlunsplit(callback._replace(
+            path="/api/authority/alert-status",
+            query="",
+            fragment="",
+        ))
     request_data = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("AUTHORITY_CALLBACK_TOKEN", "").strip()
+    if not token:
+        return {"sent": False, "error": "AUTHORITY_CALLBACK_TOKEN is not configured on the authority service"}
+    headers["Authorization"] = f"Bearer {token}"
     callback_request = Request(
         callback_url,
         data=request_data,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -174,6 +189,9 @@ def receive_alert():
                 "ok": False,
                 "error": "callback_url must use HTTPS and a host configured in DRIVER_STATUS_CALLBACK_HOSTS",
             }), 400
+    driver_username = str(data.get("driver_username") or "").strip().lower()[:50]
+    if driver_username and not re.fullmatch(r"[a-z0-9._-]{3,50}", driver_username):
+        return jsonify({"ok": False, "error": "driver_username is invalid"}), 400
     vehicle_id = str(data.get("vehicle_id") or data.get("bus_id") or "UNKNOWN")[:80]
     event_type = str(data.get("event_type") or "crowd").lower()[:50]
     allowed = {"crowd", "overcrowding", "congestion", "medical_emergency", "driver_injured",
@@ -189,14 +207,14 @@ def receive_alert():
     except (ValueError, TypeError): capacity = None
     created = str(data.get("timestamp") or now_iso())[:80]
     with db() as con:
-        cur = con.execute("""INSERT INTO alerts(event_id,vehicle_id,route,stop_name,event_type,severity,occupancy,capacity,message,source,status,created_at,callback_url)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+        cur = con.execute("""INSERT INTO alerts(event_id,vehicle_id,route,stop_name,event_type,severity,occupancy,capacity,message,source,status,created_at,callback_url,driver_username)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
             str(data.get("event_id") or "")[:100], vehicle_id,
             str(data.get("route") or "Unknown route")[:100],
             str(data.get("stop_name") or data.get("location") or "Unknown location")[:160],
             event_type, severity, occupancy, capacity,
             str(data.get("message") or data.get("details") or "")[:1000],
-            source, "NEW", created, callback_url or None))
+            source, "NEW", created, callback_url or None, driver_username))
         alert_id = cur.lastrowid
     return jsonify({"ok": True, "alert_id": alert_id, "status": "NEW", "received_at": now_iso()}), 201
 
@@ -208,7 +226,7 @@ def alert_status(alert_id):
         return jsonify({"ok": False, "error": "status must be ACKNOWLEDGED or RESOLVED"}), 400
     with db() as con:
         row = con.execute(
-            "SELECT id, event_id, vehicle_id, source, callback_url FROM alerts WHERE id=?",
+            "SELECT id, event_id, vehicle_id, route, source, callback_url, driver_username FROM alerts WHERE id=?",
             (alert_id,),
         ).fetchone()
         if not row:
@@ -225,7 +243,9 @@ def alert_status(alert_id):
                 "event": "alert.status.updated",
                 "alert_id": alert_id,
                 "event_id": row["event_id"],
+                "driver_username": row["driver_username"],
                 "vehicle_id": row["vehicle_id"],
+                "route": row["route"],
                 "status": status,
                 "updated_at": updated_at,
             })

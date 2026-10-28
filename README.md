@@ -52,7 +52,7 @@ Example:
 }
 ```
 
-Driver alerts must use `"source": "driver"` and include a `callback_url` where status updates should be delivered:
+Driver alerts must use `"source": "driver"`, include the authenticated driver's `driver_username`, and include the driver's alert-status callback URL:
 ```json
 {
   "event_id": "TNCA-0002",
@@ -61,19 +61,20 @@ Driver alerts must use `"source": "driver"` and include a `callback_url` where s
   "event_type": "vehicle_breakdown",
   "severity": "high",
   "source": "driver",
-  "callback_url": "https://driver.example.com/api/alert-status",
+  "driver_username": "driver01",
+  "callback_url": "https://tn-transmit-smart-crowd-ai.onrender.com/api/authority/alert-status",
   "message": "Vehicle stopped near Anna Nagar"
 }
 ```
 
-Set the Render environment variable `DRIVER_STATUS_CALLBACK_HOSTS` to the exact callback host(s) the authority is allowed to contact, comma-separated if there are several (for example `driver.example.com`). Driver callback URLs must use HTTPS and a configured host. When the authority acknowledges or resolves a driver alert, it POSTs JSON containing `event`, `alert_id`, `event_id`, `vehicle_id`, `status`, and `updated_at` to that callback URL. The status API response reports whether delivery succeeded; callback failures do not undo the authority's status update.
+The Render Blueprint allowlists the driver portal host in `DRIVER_STATUS_CALLBACK_HOSTS`. Driver callback URLs must use HTTPS and an allowlisted host. The authority sends status callbacks authenticated with the shared `AUTHORITY_CALLBACK_TOKEN`. When an alert is acknowledged or resolved, the portal stores a targeted update for that driver, which appears in the driver's shared updates feed while their dashboard is open. The status API response reports whether delivery succeeded; callback failures do not undo the authority's status update.
 
 Allowed event types include `crowd`, `overcrowding`, `congestion`, `medical_emergency`, `driver_injured`, `vehicle_breakdown`, `safety_threat`, `door_obstruction`, and `other`.
 
 ## API summary
 - `GET /api/dashboard` dashboard data
 - `POST /api/alerts` receive bus/AI or driver alerts
-- `POST /api/alerts/<id>/status` acknowledge/resolve an alert and notify the driver callback
+- `POST /api/alerts/<id>/status` acknowledge/resolve an alert and notify the driver's portal
 - `DELETE /api/alerts/<id>` delete one alert
 - `DELETE /api/alerts` clear alert history
 - `POST /api/vehicles` add a fleet vehicle
